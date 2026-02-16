@@ -1,7 +1,9 @@
 flask
 flask-cors
 python-dotenv
-docling
 openai
-requests
-pillow
+gunicorn
+# Use the CPU-only version for cloud builds
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+docling
