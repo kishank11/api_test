@@ -1,14 +1,15 @@
 import os
+import json
+import tempfile
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from docling.document_converter import DocumentConverter
 from openai import OpenAI
-import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# AWS prefers the name 'application'
+# 'application' is the industry standard variable for AWS
 application = Flask(__name__)
 CORS(application)
 
@@ -21,96 +22,54 @@ client = OpenAI(
 
 EXTRACT_PROMPT = """
 Extract structured fields from this German blood product label.
-
 Rules:
 - product_type: Erythrozyten | Plasma | Thrombozyten
-- blood_group: check AB first, then A, B, O, Its usually written in near Rh pos or neg
-- rhesus_factor: "+" if Rh pos, "-" if Rh neg
-- expiration_date: date after "Verwendbar bis" or "Verfall" or may be around Exp
-- If missing → null
-
-Return VALID JSON ONLY:
-{
-  "product_type": null,
-  "blood_group": null,
-  "rhesus_factor": null,
-  "expiration_date": null
-}
+- blood_group: A, B, AB, O
+- rhesus_factor: "+" or "-"
+- expiration_date: date after "Verwendbar bis"
+Return VALID JSON ONLY.
 """
 
-@app.route('/api/process-ocr', methods=['POST'])
+@application.route('/api/process-ocr', methods=['POST'])
 def process_ocr():
     try:
         data = request.json
         image_url = data.get('image_url')
-        
         if not image_url:
             return jsonify({'error': 'No image URL provided'}), 400
         
-        # Process with Docling
+        # We initialize converter here to ensure it doesn't freeze the build
         converter = DocumentConverter()
         result = converter.convert(image_url)
-        
-        # Get OCR text
         ocr_text = result.document.export_to_markdown()
         
-        # Process with DeepSeek
         response = client.chat.completions.create(
             model="deepseek-chat",
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"I have the following OCR text: {ocr_text} {EXTRACT_PROMPT}"
-                }
-            ],
-            stream=False,
-            max_tokens=4096,
+            messages=[{"role": "user", "content": f"OCR text: {ocr_text} {EXTRACT_PROMPT}"}],
             temperature=0.0,
         )
         
         content = response.choices[0].message.content
-        
-        # Parse JSON from response
-        import json
-        try:
-            # Extract JSON from response (in case there's extra text)
-            json_str = content
-            if '```json' in content:
-                json_str = content.split('```json')[1].split('```')[0]
-            elif '```' in content:
-                json_str = content.split('```')[1].split('```')[0]
-            
-            extracted_data = json.loads(json_str.strip())
-        except:
-            # If parsing fails, return raw content
-            extracted_data = {'raw_response': content}
-        
-        return jsonify(extracted_data)
+        # Clean the response for potential markdown triple backticks
+        json_str = content.replace('```json', '').replace('```', '').strip()
+        return jsonify(json.loads(json_str))
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/upload', methods=['POST'])
+@application.route('/api/upload', methods=['POST'])
 def upload_image():
     try:
         if 'image' not in request.files:
             return jsonify({'error': 'No image provided'}), 400
-        
         image = request.files['image']
-        
-        # Save temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
             image.save(tmp.name)
-            
-            # In production, upload to cloud storage and return URL
-            # For now, return local path
-            return jsonify({
-                'url': tmp.name,
-                'success': True
-            })
-            
+            return jsonify({'url': tmp.name, 'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# This part is ONLY for local testing. AWS ignores this and uses Gunicorn.
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 8080))
+    application.run(host="0.0.0.0", port=port)
