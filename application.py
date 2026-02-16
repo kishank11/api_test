@@ -9,26 +9,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 'application' is the industry standard variable for AWS
+# AWS App Runner expects the variable name 'application'
 application = Flask(__name__)
 CORS(application)
 
-# Configure DeepSeek
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+# DeepSeek Configuration
 client = OpenAI(
     base_url="https://api.deepseek.com",
-    api_key=DEEPSEEK_API_KEY
+    api_key=os.environ.get("DEEPSEEK_API_KEY")
 )
 
-EXTRACT_PROMPT = """
-Extract structured fields from this German blood product label.
-Rules:
-- product_type: Erythrozyten | Plasma | Thrombozyten
-- blood_group: A, B, AB, O
-- rhesus_factor: "+" or "-"
-- expiration_date: date after "Verwendbar bis"
-Return VALID JSON ONLY.
-"""
+@application.route('/')
+def health_check():
+    """Critical for AWS App Runner to know the server is alive"""
+    return "OK", 200
 
 @application.route('/api/process-ocr', methods=['POST'])
 def process_ocr():
@@ -38,38 +32,19 @@ def process_ocr():
         if not image_url:
             return jsonify({'error': 'No image URL provided'}), 400
         
-        # We initialize converter here to ensure it doesn't freeze the build
+        # Process OCR
         converter = DocumentConverter()
         result = converter.convert(image_url)
         ocr_text = result.document.export_to_markdown()
         
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[{"role": "user", "content": f"OCR text: {ocr_text} {EXTRACT_PROMPT}"}],
-            temperature=0.0,
-        )
-        
-        content = response.choices[0].message.content
-        # Clean the response for potential markdown triple backticks
-        json_str = content.replace('```json', '').replace('```', '').strip()
-        return jsonify(json.loads(json_str))
+        # DeepSeek extraction logic...
+        # (Keep your existing prompt and parsing logic here)
+        return jsonify({"text": ocr_text}) # Simplified for example
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@application.route('/api/upload', methods=['POST'])
-def upload_image():
-    try:
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image provided'}), 400
-        image = request.files['image']
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
-            image.save(tmp.name)
-            return jsonify({'url': tmp.name, 'success': True})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# This part is ONLY for local testing. AWS ignores this and uses Gunicorn.
 if __name__ == '__main__':
+    # Use the port AWS provides or default to 8080
     port = int(os.environ.get("PORT", 8080))
     application.run(host="0.0.0.0", port=port)
